@@ -22,51 +22,95 @@ namespace Loon
 
 		private static void Process(InputData data)
 		{
+			var bestPath = new List<Wind>();
+			var bestScore = 0;
+			var currentPosition = data.StartPosition;
+			for (int i = 0; i < data.Iteration; i += 10)
+			{
+				FindPaths(new Stack<Wind>(), currentPosition, 10, data, pathFound =>
+				{
+					var score = pathFound.Sum(w => w.Targets.Count);
+
+					if (bestScore < score)
+					{
+						bestPath = pathFound.ToList();
+						bestScore = score;
+                    }
+                });
+
+				currentPosition = bestPath.Last().Position;
+			}
+
 			for (int iteration = 0; iteration < data.Iteration; ++iteration)
 			{
-				Random rnd = new Random();
-				Console.WriteLine(
-					String.Join(" ",
-						data.Ballons
-							.Select(x =>
+				Console.Error.WriteLine(iteration);
+
+				var movements = data.Ballons
+							.Select(b =>
 							{
-								var r = rnd.Next(1, 4);
+								var wind = data.Winds
+									.Where(w => w.Position.X == b.X && w.Position.Y == b.Y && w.Position.Z == b.Altitude)
+									.FirstOrDefault();
 
-								if (x.Altitude <= 0)
+								if (wind != null)
 								{
-									x.Altitude = x.Altitude + 1;
-									return "1";
+									b.X = (b.X + wind.X) % data.ColumnsCount;
+									b.Y = b.Y + wind.Y;
 								}
-
-								if (x.Altitude == data.Altitude - 1)
-								{
-									r = rnd.Next(1, 3);
-
-									if (r == 1)
-										return "0";
-
-									x.Altitude = x.Altitude - 1;
-									return "-1";
-								}
-
-								if (r == 1)
-								{
-									x.Altitude = x.Altitude + 1;
-									return "1";
-								}
-								else if (r == 2)
-								{
-									return "0";
-								}
-
 								else
 								{
-									x.Altitude = x.Altitude - 1;
-									return "-1";
+									Console.WriteLine("Ballon lost");
 								}
+
+								var winds = data.Winds
+									.Where(w => w.Position.X == b.X && w.Position.Y == b.Y)
+									.ToList();
+
+								switch (b.BallonAction(winds))
+								{
+									case BallonDirection.Up:
+										return "1";
+									case BallonDirection.Stand:
+										return "0";
+									case BallonDirection.Down:
+										return "-1";
+								}
+
+								throw new NotImplementedException();
 							})
-							.ToArray()
-					));
+							.ToArray();
+
+                Console.WriteLine(String.Join(" ", movements));
+			}
+		}
+
+		private static IEnumerable<Stack<Wind>> FindPaths(Stack<Wind> path, Position position, int iteration, InputData data, Action<Stack<Wind>> pathFound)
+		{
+			if (iteration == 0)
+			{
+				yield return path;
+			}
+
+			var contextWinds = data.Winds
+				.Where(w => w.Position.Y == position.Y && w.Position.X == position.X && (w.Position.Z == position.Z - 1 || w.Position.Z == position.Z || w.Position.Z == position.Z + 1))
+				.Where(w => w.Avoid == false)
+				.ToList();
+
+			if (contextWinds.Any()) {
+
+				foreach (var w in contextWinds)
+				{
+					path.Push(w);
+
+					var nextPosition = new Position(
+						position.X + w.X % data.ColumnsCount,
+						position.Y + w.Y,
+						w.Position.Z);
+
+                    FindPaths(path, nextPosition, iteration - 1, data, pathFound);
+
+					path.Pop();
+				}
 			}
 		}
 
@@ -84,72 +128,58 @@ namespace Loon
 			var lines = File.ReadAllLines(inputFile);
 			var stream = File.OpenText(inputFile);
 
+			var data = new InputData();
+
 			var infos = ExtractLineValues(stream);
 
-			var nbRow = infos[0];
-			var nbCol = infos[1];
-			var nbAltitude = infos[2];
+			data.RowsCount = infos[0];
+			data.ColumnsCount = infos[1];
+			data.AltitudesCount = infos[2];
 
 			infos = ExtractLineValues(stream);
 
-			var nbTarget = infos[0];
-			var coverRadius = infos[1];
-			var nbBallon = infos[2];
-			var nbIteration = infos[3];
+			data.TargetsCount = infos[0];
+			data.Radius = infos[1];
+			data.BallonsCount = infos[2];
+			data.Iteration = infos[3];
 
 			infos = ExtractLineValues(stream);
 
-			var startPosition = new Point(infos[1], infos[0]);
+			data.StartPosition = new Position(infos[1], infos[0], 0);
 
-			List<Target> targets = new List<Target>();
-
-			for (int t = 0; t < nbTarget; ++t)
+			for (int t = 0; t < data.TargetsCount; ++t)
 			{
 				infos = ExtractLineValues(stream);
 
 				var target = new Target(t, infos[1], infos[0]);
 
-				targets.Add(target);
+				data.Targets.Add(target);
             }
 
-			List<Wind> winds = new List<Wind>();
-			for (int altitude = 0; altitude < nbAltitude; altitude++)
+			for (int altitude = 0; altitude < data.AltitudesCount; altitude++)
 			{
-				for (int row = 0; row < nbRow; ++row)
+				for (int row = 0; row < data.RowsCount; ++row)
 				{
 					infos = ExtractLineValues(stream);
 
-					for (int column = 0; column < nbCol; ++column)
-					{
-						var wind = new Wind(altitude, row, column, infos[column * 2 + 1], infos[column * 2]);
+					for (int column = 0; column < data.ColumnsCount; ++column)
+					 {
+						var windPosition = new Position(column, row, altitude);
+						var wind = new Wind(windPosition, infos[column * 2 + 1], infos[column * 2], data);
 
-						winds.Add(wind);
+						data.Winds.Add(wind);
                     }
 				}
 			}
 
-			var ballons = new List<Ballon>();
-
-			for (var b = 0; b < nbBallon; ++b)
+			for (var b = 0; b < data.BallonsCount; ++b)
 			{
-				var ballon = new Ballon(startPosition.X, startPosition.Y, -1);
+				var ballon = new Ballon(data.StartPosition.X, data.StartPosition.Y, -1);
 
-				ballons.Add(ballon);
+				data.Ballons.Add(ballon);
 			}
 
-			return new InputData
-			{
-				Rows = nbRow,
-				Columns = nbCol,
-				Altitude = nbAltitude,
-				Target = nbTarget,
-				CoverRadius = coverRadius,
-				Ballon = nbBallon, 
-				Iteration = nbIteration,
-				Winds = winds,
-				Targets = targets,
-				Ballons = ballons
-			};
+			return data;
 		}
 	}
 }
